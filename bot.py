@@ -5,6 +5,7 @@ import pytz
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 import asyncio
+from aiohttp import web
 
 # Singapore timezone
 SGT = pytz.timezone('Asia/Singapore')
@@ -592,6 +593,24 @@ def main():
     job_queue.run_repeating(send_reminders, interval=60, first=10)
     
     print("🤖 Bot is running!")
+    
+    # Start health check web server for Render
+    async def health_check(request):
+        return web.Response(text="Bot is running!")
+    
+    async def start_web_server():
+        web_app = web.Application()
+        web_app.router.add_get('/', health_check)
+        web_app.router.add_get('/health', health_check)
+        runner = web.AppRunner(web_app)
+        await runner.setup()
+        port = int(os.getenv('PORT', 10000))
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        print(f"🌐 Web server running on port {port}")
+    
+    # Start web server
+    asyncio.get_event_loop().create_task(start_web_server())
     
     # Run the bot
     app.run_polling(allowed_updates=Update.ALL_TYPES)
