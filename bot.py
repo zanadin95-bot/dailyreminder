@@ -46,6 +46,12 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle menu selections"""
     text = update.message.text
     
+    # Show welcome menu if user just sent any text and hasn't seen menu yet
+    if not context.user_data.get('menu_shown'):
+        context.user_data['menu_shown'] = True
+        await start(update, context)
+        return
+    
     if '1' in text or 'Add' in text:
         return await add_reminder_start(update, context)
     elif '2' in text or 'See' in text or 'List' in text:
@@ -189,53 +195,98 @@ async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['time'] = time_str
     
+    keyboard = [
+        ['Today'],
+        ['Tomorrow'],
+        ['Custom Date']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    
     await update.message.reply_text(
-        "📅 When should this reminder start?\n\n"
-        "Please enter the start date:\n"
-        "Format: YYYY-MM-DD\n"
-        "Example: 2026-01-27\n\n"
-        "Or type 'today' to start immediately",
-        reply_markup=ReplyKeyboardRemove()
+        "📅 When should this reminder start?",
+        reply_markup=reply_markup
     )
     return START_DATE
 
 async def get_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save start date and ask for end date"""
-    date_str = update.message.text.strip().lower()
+    date_str = update.message.text.strip()
     
-    if date_str == 'today':
+    if date_str == 'Today':
         date_str = datetime.utcnow().strftime("%Y-%m-%d")
-    
-    try:
-        # Validate date format
-        datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
+    elif date_str == 'Tomorrow':
+        from datetime import timedelta
+        tomorrow = datetime.utcnow() + timedelta(days=1)
+        date_str = tomorrow.strftime("%Y-%m-%d")
+    elif date_str == 'Custom Date':
         await update.message.reply_text(
-            "❌ Invalid date format.\n\n"
-            "Please use: YYYY-MM-DD\n"
-            "Example: 2026-01-27\n\n"
-            "Or type 'today'"
+            "Please enter the start date:\n"
+            "Format: YYYY-MM-DD\n"
+            "Example: 2026-01-27",
+            reply_markup=ReplyKeyboardRemove()
         )
         return START_DATE
+    else:
+        # Custom date entered
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid date format.\n\n"
+                "Please use: YYYY-MM-DD\n"
+                "Example: 2026-01-27"
+            )
+            return START_DATE
     
     context.user_data['start_date'] = date_str
     
+    keyboard = [
+        ['Never'],
+        ['1 Week'],
+        ['1 Month'],
+        ['3 Months'],
+        ['6 Months'],
+        ['1 Year'],
+        ['Custom Date']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    
     await update.message.reply_text(
-        "📅 When should this reminder end?\n\n"
-        "Please enter the end date:\n"
-        "Format: YYYY-MM-DD\n"
-        "Example: 2026-12-31\n\n"
-        "Or type 'never' for no end date",
-        reply_markup=ReplyKeyboardRemove()
+        "📅 When should this reminder end?",
+        reply_markup=reply_markup
     )
     return END_DATE
 
 async def get_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save end date and complete the reminder"""
-    date_str = update.message.text.strip().lower()
+    date_str = update.message.text.strip()
     
-    if date_str == 'never':
+    if date_str == 'Never':
         date_str = None
+    elif date_str == 'Custom Date':
+        await update.message.reply_text(
+            "Please enter the end date:\n"
+            "Format: YYYY-MM-DD\n"
+            "Example: 2026-12-31",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return END_DATE
+    elif date_str in ['1 Week', '1 Month', '3 Months', '6 Months', '1 Year']:
+        from datetime import timedelta
+        start_date = datetime.strptime(context.user_data['start_date'], "%Y-%m-%d")
+        
+        if date_str == '1 Week':
+            end_date = start_date + timedelta(weeks=1)
+        elif date_str == '1 Month':
+            end_date = start_date + timedelta(days=30)
+        elif date_str == '3 Months':
+            end_date = start_date + timedelta(days=90)
+        elif date_str == '6 Months':
+            end_date = start_date + timedelta(days=180)
+        elif date_str == '1 Year':
+            end_date = start_date + timedelta(days=365)
+        
+        date_str = end_date.strftime("%Y-%m-%d")
     else:
         try:
             # Validate date format
@@ -245,7 +296,7 @@ async def get_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if end_date <= start_date:
                 await update.message.reply_text(
                     "❌ End date must be after start date!\n\n"
-                    "Please enter a valid end date or type 'never'"
+                    "Please choose again or enter a valid date"
                 )
                 return END_DATE
                 
@@ -253,8 +304,7 @@ async def get_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "❌ Invalid date format.\n\n"
                 "Please use: YYYY-MM-DD\n"
-                "Example: 2026-12-31\n\n"
-                "Or type 'never'"
+                "Example: 2026-12-31"
             )
             return END_DATE
     
@@ -510,6 +560,8 @@ def main():
     app.add_handler(add_conv_handler)
     app.add_handler(remove_conv_handler)
     app.add_handler(MessageHandler(filters.Regex('^(2|See|List)'), see_list))
+    
+    # Catch-all handler for menu and first message - must be last
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
     
     # Set up job queue for reminders
