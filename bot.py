@@ -90,10 +90,17 @@ async def get_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save frequency and ask for appropriate next step"""
-    frequency = update.message.text
+    frequency = update.message.text.strip()
     
     if frequency not in ['Daily', 'Weekly', 'Monthly', 'One-off']:
-        await update.message.reply_text("Please choose: Daily, Weekly, Monthly, or One-off")
+        keyboard = [
+            ['Daily'],
+            ['Weekly'],
+            ['Monthly'],
+            ['One-off']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        await update.message.reply_text("Please choose: Daily, Weekly, Monthly, or One-off", reply_markup=reply_markup)
         return FREQUENCY
     
     context.user_data['frequency'] = frequency
