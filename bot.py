@@ -1,9 +1,13 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 import asyncio
+
+# Singapore timezone
+SGT = pytz.timezone('Asia/Singapore')
 
 # Store reminders in a JSON file
 REMINDERS_FILE = 'reminders.json'
@@ -133,8 +137,9 @@ async def get_one_off_datetime(update: Update, context: ContextTypes.DEFAULT_TYP
         # Validate datetime format
         reminder_datetime = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
         
-        # Check if date is in the future
-        if reminder_datetime <= datetime.utcnow():
+        # Check if date is in the future (Singapore time)
+        now_sgt = datetime.now(SGT).replace(tzinfo=None)
+        if reminder_datetime <= now_sgt:
             await update.message.reply_text(
                 "❌ Please enter a future date and time!\n\n"
                 "Format: YYYY-MM-DD HH:MM\n"
@@ -178,7 +183,7 @@ async def get_one_off_datetime(update: Update, context: ContextTypes.DEFAULT_TYP
         f"✅ Reminder added!\n\n"
         f"📝 Task: {new_reminder['task']}\n"
         f"📅 One-time reminder\n"
-        f"🗓️ Date & Time: {datetime_str} UTC\n\n"
+        f"🗓️ Date & Time: {datetime_str} SGT\n\n"
         f"Choose your next action:",
         reply_markup=reply_markup
     )
@@ -220,10 +225,9 @@ async def get_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date_str = update.message.text.strip()
     
     if date_str == 'Today':
-        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        date_str = datetime.now(SGT).strftime("%Y-%m-%d")
     elif date_str == 'Tomorrow':
-        from datetime import timedelta
-        tomorrow = datetime.utcnow() + timedelta(days=1)
+        tomorrow = datetime.now(SGT) + timedelta(days=1)
         date_str = tomorrow.strftime("%Y-%m-%d")
     elif date_str == 'Custom Date':
         await update.message.reply_text(
@@ -279,7 +283,6 @@ async def get_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return END_DATE
     elif date_str in ['1 Week', '1 Month', '3 Months', '6 Months', '1 Year']:
-        from datetime import timedelta
         start_date = datetime.strptime(context.user_data['start_date'], "%Y-%m-%d")
         
         if date_str == '1 Week':
@@ -346,7 +349,7 @@ async def get_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Reminder added!\n\n"
         f"📝 Task: {new_reminder['task']}\n"
         f"📅 Frequency: {new_reminder['frequency']}\n"
-        f"⏰ Time: {new_reminder['time']} UTC\n"
+        f"⏰ Time: {new_reminder['time']} SGT\n"
         f"🗓️ Start: {new_reminder['start_date']}\n"
         f"{end_text}\n\n"
         f"Choose your next action:",
@@ -382,9 +385,9 @@ async def see_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += f"   📅 {reminder['frequency']}\n"
         
         if reminder['frequency'] == 'One-off':
-            message += f"   🗓️ {reminder['datetime']} UTC\n"
+            message += f"   🗓️ {reminder['datetime']} SGT\n"
         else:
-            message += f"   ⏰ {reminder['time']} UTC\n"
+            message += f"   ⏰ {reminder['time']} SGT\n"
             message += f"   🗓️ Start: {reminder['start_date']}\n"
             end_text = reminder['end_date'] if reminder['end_date'] else 'Never'
             message += f"   🗓️ End: {end_text}\n"
@@ -480,11 +483,14 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def send_reminders(context: ContextTypes.DEFAULT_TYPE):
     """Check and send reminders"""
-    current_datetime = datetime.utcnow()
-    current_time = current_datetime.strftime("%H:%M")
-    current_date = current_datetime.strftime("%Y-%m-%d")
-    current_day = current_datetime.day
-    current_weekday = current_datetime.weekday()
+    # Get current Singapore time
+    now_sgt = datetime.now(SGT)
+    current_time = now_sgt.strftime("%H:%M")
+    current_date = now_sgt.strftime("%Y-%m-%d")
+    current_day = now_sgt.day
+    current_weekday = now_sgt.weekday()
+    
+    print(f"Checking reminders at {current_date} {current_time} SGT")
     
     for user_id, user_reminders in reminders.items():
         for reminder in user_reminders:
@@ -494,7 +500,12 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE):
             if reminder['frequency'] == 'One-off':
                 if not reminder.get('sent', False):
                     reminder_dt = datetime.strptime(reminder['datetime'], "%Y-%m-%d %H:%M")
-                    if current_datetime >= reminder_dt:
+                    reminder_time = reminder_dt.strftime("%H:%M")
+                    reminder_date = reminder_dt.strftime("%Y-%m-%d")
+                    
+                    print(f"One-off check: {reminder_date} {reminder_time} vs {current_date} {current_time}")
+                    
+                    if current_date == reminder_date and current_time == reminder_time:
                         should_send = True
                         reminder['sent'] = True
                         save_reminders(reminders)
@@ -503,12 +514,15 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Check if within date range
                 if current_date < reminder['start_date']:
+                    print(f"Reminder not started yet: {reminder['start_date']}")
                     continue
                 if reminder['end_date'] and current_date > reminder['end_date']:
+                    print(f"Reminder ended: {reminder['end_date']}")
                     continue
                 
                 # Check if it's time to send
                 if reminder['time'] == current_time:
+                    print(f"Time matches! Checking frequency: {reminder['frequency']}")
                     if reminder['frequency'] == 'Daily':
                         should_send = True
                     elif reminder['frequency'] == 'Weekly' and current_weekday == 0:
@@ -517,12 +531,14 @@ async def send_reminders(context: ContextTypes.DEFAULT_TYPE):
                         should_send = True
             
             if should_send:
+                print(f"Sending reminder to {user_id}: {reminder['task']}")
                 message = "Attention Warrior Erin! Remember to take a break a little, smile and think of the positive things~ Here are the side quests that you need to complete before you get back on with your day, my love :)\n\n"
                 message += f"⚔️ {reminder['task']}"
                 try:
                     await context.bot.send_message(chat_id=int(user_id), text=message)
+                    print(f"✅ Reminder sent successfully!")
                 except Exception as e:
-                    print(f"Error sending to {user_id}: {e}")
+                    print(f"❌ Error sending to {user_id}: {e}")
 
 def main():
     """Start the bot"""
