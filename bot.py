@@ -1,12 +1,16 @@
 import os
 import json
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 import asyncio
 
 # Store reminders in a JSON file
 REMINDERS_FILE = 'reminders.json'
+
+# Conversation states
+TASK, FREQUENCY, TIME, START_DATE, END_DATE, ONE_OFF_DATETIME = range(6)
+REMOVE_NUMBER = 0
 
 def load_reminders():
     """Load reminders from JSON file"""
@@ -20,136 +24,448 @@ def save_reminders(reminders):
     with open(REMINDERS_FILE, 'w') as f:
         json.dump(reminders, f, indent=2)
 
-# Global reminders storage: {user_id: {time: "HH:MM", tasks: ["task1", "task2"]}}
+# Global reminders storage
 reminders = load_reminders()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send welcome message"""
+    """Send welcome message with main menu"""
+    keyboard = [
+        ['1. Add Reminder'],
+        ['2. See List'],
+        ['3. Remove Reminder']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    
     await update.message.reply_text(
-        "👋 Hey! I'm your Daily Reminder Bot!\n\n"
-        "Commands:\n"
-        "/settime HH:MM - Set your daily reminder time (24-hour format)\n"
-        "/addtask Your task here - Add a task to your daily reminders\n"
-        "/removetask Task number - Remove a task\n"
-        "/list - See all your tasks\n"
-        "/mystatus - Check your reminder settings\n"
-        "/help - Show this message again"
+        "Hello Princess Erin <3 I hope this helps you make your life easier and remind of you the important things you need to do. Ready to nudge when you need a little reminder or a little smile! :)\n\n"
+        "Choose an option below:",
+        reply_markup=reply_markup
     )
 
-async def set_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set the daily reminder time"""
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle menu selections"""
+    text = update.message.text
+    
+    if '1' in text or 'Add' in text:
+        return await add_reminder_start(update, context)
+    elif '2' in text or 'See' in text or 'List' in text:
+        return await see_list(update, context)
+    elif '3' in text or 'Remove' in text:
+        return await remove_reminder_start(update, context)
+    else:
+        await update.message.reply_text("Please choose one of the options from the menu.")
+
+# ADD REMINDER FLOW
+async def add_reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start adding a reminder - ask for task"""
+    await update.message.reply_text(
+        "📝 What would you like to be reminded about?",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return TASK
+
+async def get_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save task and ask for frequency"""
+    context.user_data['task'] = update.message.text
+    
+    keyboard = [
+        ['Daily'],
+        ['Weekly'],
+        ['Monthly'],
+        ['One-off']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    
+    await update.message.reply_text(
+        "📅 How often should I remind you?",
+        reply_markup=reply_markup
+    )
+    return FREQUENCY
+
+async def get_frequency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save frequency and ask for appropriate next step"""
+    frequency = update.message.text
+    
+    if frequency not in ['Daily', 'Weekly', 'Monthly', 'One-off']:
+        await update.message.reply_text("Please choose: Daily, Weekly, Monthly, or One-off")
+        return FREQUENCY
+    
+    context.user_data['frequency'] = frequency
+    
+    if frequency == 'One-off':
+        # For one-off, ask for date and time together
+        await update.message.reply_text(
+            "📅 When should I send this reminder?\n\n"
+            "Please enter date and time:\n"
+            "Format: YYYY-MM-DD HH:MM\n"
+            "Example: 2026-02-15 14:30",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return ONE_OFF_DATETIME
+    else:
+        # For recurring, ask for time first
+        await update.message.reply_text(
+            "⏰ What time should I send the reminder?\n\n"
+            "Please enter in 24-hour format (HH:MM)\n"
+            "Example: 09:00 or 14:30",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return TIME
+
+async def get_one_off_datetime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get date and time for one-off reminder"""
+    datetime_str = update.message.text.strip()
+    
+    try:
+        # Validate datetime format
+        reminder_datetime = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+        
+        # Check if date is in the future
+        if reminder_datetime <= datetime.utcnow():
+            await update.message.reply_text(
+                "❌ Please enter a future date and time!\n\n"
+                "Format: YYYY-MM-DD HH:MM\n"
+                "Example: 2026-02-15 14:30"
+            )
+            return ONE_OFF_DATETIME
+        
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid format.\n\n"
+            "Please use: YYYY-MM-DD HH:MM\n"
+            "Example: 2026-02-15 14:30"
+        )
+        return ONE_OFF_DATETIME
+    
+    # Save the one-off reminder
     user_id = str(update.effective_user.id)
     
-    if not context.args or len(context.args) != 1:
-        await update.message.reply_text("Usage: /settime HH:MM (e.g., /settime 09:00)")
-        return
+    if user_id not in reminders:
+        reminders[user_id] = []
     
-    time_str = context.args[0]
+    new_reminder = {
+        'task': context.user_data['task'],
+        'frequency': 'One-off',
+        'datetime': datetime_str,
+        'sent': False
+    }
+    
+    reminders[user_id].append(new_reminder)
+    save_reminders(reminders)
+    
+    # Show confirmation
+    keyboard = [
+        ['1. Add Reminder'],
+        ['2. See List'],
+        ['3. Remove Reminder']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"✅ Reminder added!\n\n"
+        f"📝 Task: {new_reminder['task']}\n"
+        f"📅 One-time reminder\n"
+        f"🗓️ Date & Time: {datetime_str} UTC\n\n"
+        f"Choose your next action:",
+        reply_markup=reply_markup
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save time and ask for start date"""
+    time_str = update.message.text.strip()
+    
     try:
         # Validate time format
         datetime.strptime(time_str, "%H:%M")
-        
-        if user_id not in reminders:
-            reminders[user_id] = {"time": time_str, "tasks": []}
-        else:
-            reminders[user_id]["time"] = time_str
-        
-        save_reminders(reminders)
-        await update.message.reply_text(f"✅ Daily reminder time set to {time_str} UTC!")
-        
     except ValueError:
-        await update.message.reply_text("❌ Invalid time format. Use HH:MM (e.g., 09:00)")
+        await update.message.reply_text(
+            "❌ Invalid time format.\n\n"
+            "Please use HH:MM (e.g., 09:00 or 14:30)"
+        )
+        return TIME
+    
+    context.user_data['time'] = time_str
+    
+    await update.message.reply_text(
+        "📅 When should this reminder start?\n\n"
+        "Please enter the start date:\n"
+        "Format: YYYY-MM-DD\n"
+        "Example: 2026-01-27\n\n"
+        "Or type 'today' to start immediately",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return START_DATE
 
-async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Add a task to daily reminders"""
-    user_id = str(update.effective_user.id)
+async def get_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save start date and ask for end date"""
+    date_str = update.message.text.strip().lower()
     
-    if not context.args:
-        await update.message.reply_text("Usage: /addtask Your task description here")
-        return
-    
-    task = " ".join(context.args)
-    
-    if user_id not in reminders:
-        reminders[user_id] = {"time": "09:00", "tasks": []}
-    
-    reminders[user_id]["tasks"].append(task)
-    save_reminders(reminders)
-    
-    await update.message.reply_text(f"✅ Task added: {task}\n\nYou now have {len(reminders[user_id]['tasks'])} task(s).")
-
-async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Remove a task by number"""
-    user_id = str(update.effective_user.id)
-    
-    if user_id not in reminders or not reminders[user_id]["tasks"]:
-        await update.message.reply_text("You don't have any tasks to remove!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("Usage: /removetask <task_number>\n\nUse /list to see task numbers.")
-        return
+    if date_str == 'today':
+        date_str = datetime.utcnow().strftime("%Y-%m-%d")
     
     try:
-        task_num = int(context.args[0]) - 1
-        if 0 <= task_num < len(reminders[user_id]["tasks"]):
-            removed_task = reminders[user_id]["tasks"].pop(task_num)
-            save_reminders(reminders)
-            await update.message.reply_text(f"✅ Removed: {removed_task}")
-        else:
-            await update.message.reply_text("❌ Invalid task number!")
+        # Validate date format
+        datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
-        await update.message.reply_text("❌ Please provide a valid task number!")
+        await update.message.reply_text(
+            "❌ Invalid date format.\n\n"
+            "Please use: YYYY-MM-DD\n"
+            "Example: 2026-01-27\n\n"
+            "Or type 'today'"
+        )
+        return START_DATE
+    
+    context.user_data['start_date'] = date_str
+    
+    await update.message.reply_text(
+        "📅 When should this reminder end?\n\n"
+        "Please enter the end date:\n"
+        "Format: YYYY-MM-DD\n"
+        "Example: 2026-12-31\n\n"
+        "Or type 'never' for no end date",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return END_DATE
 
-async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all tasks"""
-    user_id = str(update.effective_user.id)
+async def get_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save end date and complete the reminder"""
+    date_str = update.message.text.strip().lower()
     
-    if user_id not in reminders or not reminders[user_id]["tasks"]:
-        await update.message.reply_text("You don't have any tasks yet!\n\nUse /addtask to add one.")
-        return
+    if date_str == 'never':
+        date_str = None
+    else:
+        try:
+            # Validate date format
+            end_date = datetime.strptime(date_str, "%Y-%m-%d")
+            start_date = datetime.strptime(context.user_data['start_date'], "%Y-%m-%d")
+            
+            if end_date <= start_date:
+                await update.message.reply_text(
+                    "❌ End date must be after start date!\n\n"
+                    "Please enter a valid end date or type 'never'"
+                )
+                return END_DATE
+                
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid date format.\n\n"
+                "Please use: YYYY-MM-DD\n"
+                "Example: 2026-12-31\n\n"
+                "Or type 'never'"
+            )
+            return END_DATE
     
-    tasks = reminders[user_id]["tasks"]
-    message = "📋 Your Daily Tasks:\n\n"
-    for i, task in enumerate(tasks, 1):
-        message += f"{i}. {task}\n"
-    
-    await update.message.reply_text(message)
-
-async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user's reminder settings"""
+    # Save the reminder
     user_id = str(update.effective_user.id)
     
     if user_id not in reminders:
-        await update.message.reply_text("You haven't set up any reminders yet!\n\nUse /settime and /addtask to get started.")
+        reminders[user_id] = []
+    
+    new_reminder = {
+        'task': context.user_data['task'],
+        'frequency': context.user_data['frequency'],
+        'time': context.user_data['time'],
+        'start_date': context.user_data['start_date'],
+        'end_date': date_str
+    }
+    
+    reminders[user_id].append(new_reminder)
+    save_reminders(reminders)
+    
+    # Show confirmation
+    keyboard = [
+        ['1. Add Reminder'],
+        ['2. See List'],
+        ['3. Remove Reminder']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    end_text = f"🗓️ End: {date_str}" if date_str else "🗓️ End: Never"
+    
+    await update.message.reply_text(
+        f"✅ Reminder added!\n\n"
+        f"📝 Task: {new_reminder['task']}\n"
+        f"📅 Frequency: {new_reminder['frequency']}\n"
+        f"⏰ Time: {new_reminder['time']} UTC\n"
+        f"🗓️ Start: {new_reminder['start_date']}\n"
+        f"{end_text}\n\n"
+        f"Choose your next action:",
+        reply_markup=reply_markup
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+# SEE LIST
+async def see_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all reminders"""
+    user_id = str(update.effective_user.id)
+    
+    keyboard = [
+        ['1. Add Reminder'],
+        ['2. See List'],
+        ['3. Remove Reminder']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    if user_id not in reminders or not reminders[user_id]:
+        await update.message.reply_text(
+            "You don't have any reminders yet!\n\n"
+            "Use '1. Add Reminder' to create one.",
+            reply_markup=reply_markup
+        )
         return
     
-    user_data = reminders[user_id]
-    message = f"⚙️ Your Settings:\n\n"
-    message += f"⏰ Reminder Time: {user_data.get('time', 'Not set')} UTC\n"
-    message += f"📝 Tasks: {len(user_data.get('tasks', []))}"
+    message = "📋 Your Reminders:\n\n"
+    for i, reminder in enumerate(reminders[user_id], 1):
+        message += f"{i}. {reminder['task']}\n"
+        message += f"   📅 {reminder['frequency']}\n"
+        
+        if reminder['frequency'] == 'One-off':
+            message += f"   🗓️ {reminder['datetime']} UTC\n"
+        else:
+            message += f"   ⏰ {reminder['time']} UTC\n"
+            message += f"   🗓️ Start: {reminder['start_date']}\n"
+            end_text = reminder['end_date'] if reminder['end_date'] else 'Never'
+            message += f"   🗓️ End: {end_text}\n"
+        
+        message += "\n"
     
-    await update.message.reply_text(message)
+    await update.message.reply_text(message, reply_markup=reply_markup)
 
-async def send_daily_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Send daily reminders to all users"""
-    current_time = datetime.utcnow().strftime("%H:%M")
+# REMOVE REMINDER FLOW
+async def remove_reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start removing a reminder"""
+    user_id = str(update.effective_user.id)
     
-    for user_id, data in reminders.items():
-        if data.get("time") == current_time and data.get("tasks"):
-            message = "🔔 Daily Reminder!\n\n"
-            message += "📋 Your tasks for today:\n\n"
-            for i, task in enumerate(data["tasks"], 1):
-                message += f"{i}. {task}\n"
+    if user_id not in reminders or not reminders[user_id]:
+        keyboard = [
+            ['1. Add Reminder'],
+            ['2. See List'],
+            ['3. Remove Reminder']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            "You don't have any reminders to remove!",
+            reply_markup=reply_markup
+        )
+        return ConversationHandler.END
+    
+    # Show list with numbers
+    message = "📋 Your Reminders:\n\n"
+    for i, reminder in enumerate(reminders[user_id], 1):
+        if reminder['frequency'] == 'One-off':
+            message += f"{i}. {reminder['task']} (One-off, {reminder['datetime']})\n"
+        else:
+            message += f"{i}. {reminder['task']} ({reminder['frequency']}, {reminder['time']})\n"
+    
+    message += "\n🗑️ Which reminder would you like to remove?\n"
+    message += "Enter the number:"
+    
+    await update.message.reply_text(message, reply_markup=ReplyKeyboardRemove())
+    return REMOVE_NUMBER
+
+async def remove_reminder_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove the selected reminder"""
+    user_id = str(update.effective_user.id)
+    
+    try:
+        number = int(update.message.text.strip())
+        
+        if 1 <= number <= len(reminders[user_id]):
+            removed = reminders[user_id].pop(number - 1)
+            save_reminders(reminders)
             
-            try:
-                await context.bot.send_message(chat_id=int(user_id), text=message)
-            except Exception as e:
-                print(f"Error sending to {user_id}: {e}")
+            keyboard = [
+                ['1. Add Reminder'],
+                ['2. See List'],
+                ['3. Remove Reminder']
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
+            await update.message.reply_text(
+                f"✅ Reminder removed!\n\n"
+                f"📝 {removed['task']}\n\n"
+                f"Choose your next action:",
+                reply_markup=reply_markup
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Invalid number. Please enter a number between 1 and {len(reminders[user_id])}"
+            )
+            return REMOVE_NUMBER
+            
+    except ValueError:
+        await update.message.reply_text("❌ Please enter a valid number")
+        return REMOVE_NUMBER
+    
+    return ConversationHandler.END
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show help message"""
-    await start(update, context)
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel the current operation"""
+    keyboard = [
+        ['1. Add Reminder'],
+        ['2. See List'],
+        ['3. Remove Reminder']
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "Operation cancelled. Choose an option:",
+        reply_markup=reply_markup
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def send_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """Check and send reminders"""
+    current_datetime = datetime.utcnow()
+    current_time = current_datetime.strftime("%H:%M")
+    current_date = current_datetime.strftime("%Y-%m-%d")
+    current_day = current_datetime.day
+    current_weekday = current_datetime.weekday()
+    
+    for user_id, user_reminders in reminders.items():
+        for reminder in user_reminders:
+            should_send = False
+            
+            # Handle one-off reminders
+            if reminder['frequency'] == 'One-off':
+                if not reminder.get('sent', False):
+                    reminder_dt = datetime.strptime(reminder['datetime'], "%Y-%m-%d %H:%M")
+                    if current_datetime >= reminder_dt:
+                        should_send = True
+                        reminder['sent'] = True
+                        save_reminders(reminders)
+            
+            # Handle recurring reminders
+            else:
+                # Check if within date range
+                if current_date < reminder['start_date']:
+                    continue
+                if reminder['end_date'] and current_date > reminder['end_date']:
+                    continue
+                
+                # Check if it's time to send
+                if reminder['time'] == current_time:
+                    if reminder['frequency'] == 'Daily':
+                        should_send = True
+                    elif reminder['frequency'] == 'Weekly' and current_weekday == 0:
+                        should_send = True
+                    elif reminder['frequency'] == 'Monthly' and current_day == 1:
+                        should_send = True
+            
+            if should_send:
+                message = "Attention Warrior Erin! Remember to take a break a little, smile and think of the positive things~ Here are the side quests that you need to complete before you get back on with your day, my love :)\n\n"
+                message += f"⚔️ {reminder['task']}"
+                try:
+                    await context.bot.send_message(chat_id=int(user_id), text=message)
+                except Exception as e:
+                    print(f"Error sending to {user_id}: {e}")
 
 def main():
     """Start the bot"""
@@ -162,18 +478,43 @@ def main():
     # Create application
     app = Application.builder().token(TOKEN).build()
     
-    # Add command handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("settime", set_time))
-    app.add_handler(CommandHandler("addtask", add_task))
-    app.add_handler(CommandHandler("removetask", remove_task))
-    app.add_handler(CommandHandler("list", list_tasks))
-    app.add_handler(CommandHandler("mystatus", my_status))
-    app.add_handler(CommandHandler("help", help_command))
+    # Add reminder conversation handler
+    add_conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex('^(1|Add)'), add_reminder_start)
+        ],
+        states={
+            TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_task)],
+            FREQUENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_frequency)],
+            TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_time)],
+            START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_start_date)],
+            END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_end_date)],
+            ONE_OFF_DATETIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_one_off_datetime)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
     
-    # Set up job queue to check for reminders every minute
+    # Remove reminder conversation handler
+    remove_conv_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex('^(3|Remove)'), remove_reminder_start)
+        ],
+        states={
+            REMOVE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_reminder_confirm)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)],
+    )
+    
+    # Add handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(add_conv_handler)
+    app.add_handler(remove_conv_handler)
+    app.add_handler(MessageHandler(filters.Regex('^(2|See|List)'), see_list))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
+    
+    # Set up job queue for reminders
     job_queue = app.job_queue
-    job_queue.run_repeating(send_daily_reminder, interval=60, first=10)
+    job_queue.run_repeating(send_reminders, interval=60, first=10)
     
     print("🤖 Bot is running!")
     
