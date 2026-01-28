@@ -555,7 +555,7 @@ def main():
     # Add reminder conversation handler
     add_conv_handler = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex('^(1|Add)'), add_reminder_start)
+            MessageHandler(filters.Regex('^1\.|^Add'), add_reminder_start)
         ],
         states={
             TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_task)],
@@ -571,7 +571,7 @@ def main():
     # Remove reminder conversation handler
     remove_conv_handler = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex('^(3|Remove)'), remove_reminder_start)
+            MessageHandler(filters.Regex('^3\.|^Remove'), remove_reminder_start)
         ],
         states={
             REMOVE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_reminder_confirm)],
@@ -579,11 +579,15 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)],
     )
     
-    # Add handlers
+    # Add handlers - ORDER MATTERS!
     app.add_handler(CommandHandler("start", start))
+    
+    # Specific regex handlers BEFORE conversation handlers
+    app.add_handler(MessageHandler(filters.Regex('^2\.|^See|^List'), see_list))
+    
+    # Conversation handlers
     app.add_handler(add_conv_handler)
     app.add_handler(remove_conv_handler)
-    app.add_handler(MessageHandler(filters.Regex('^(2|See|List)'), see_list))
     
     # Catch-all handler for menu and first message - must be last
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
