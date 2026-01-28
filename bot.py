@@ -57,14 +57,13 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
     
-    if '1' in text or 'Add' in text:
-        return await add_reminder_start(update, context)
-    elif '2' in text or 'See' in text or 'List' in text:
-        return await see_list(update, context)
-    elif '3' in text or 'Remove' in text:
-        return await remove_reminder_start(update, context)
-    else:
-        await update.message.reply_text("Please choose one of the options from the menu.")
+    # Don't process if it matches a menu button (let other handlers deal with it)
+    if text.startswith('1.') or text.startswith('2.') or text.startswith('3.'):
+        return
+    if 'Add' in text or 'See' in text or 'List' in text or 'Remove' in text:
+        return
+    
+    await update.message.reply_text("Please choose one of the options from the menu.")
 
 # ADD REMINDER FLOW
 async def add_reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
