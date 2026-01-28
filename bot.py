@@ -301,23 +301,44 @@ async def get_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         date_str = end_date.strftime("%Y-%m-%d")
     else:
+        # Custom date entered - validate it
         try:
-            # Validate date format
             end_date = datetime.strptime(date_str, "%Y-%m-%d")
             start_date = datetime.strptime(context.user_data['start_date'], "%Y-%m-%d")
             
             if end_date <= start_date:
+                keyboard = [
+                    ['Never'],
+                    ['1 Week'],
+                    ['1 Month'],
+                    ['3 Months'],
+                    ['6 Months'],
+                    ['1 Year'],
+                    ['Custom Date']
+                ]
+                reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
                 await update.message.reply_text(
                     "❌ End date must be after start date!\n\n"
-                    "Please choose again or enter a valid date"
+                    "Please choose again:",
+                    reply_markup=reply_markup
                 )
                 return END_DATE
                 
         except ValueError:
+            keyboard = [
+                ['Never'],
+                ['1 Week'],
+                ['1 Month'],
+                ['3 Months'],
+                ['6 Months'],
+                ['1 Year'],
+                ['Custom Date']
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
             await update.message.reply_text(
                 "❌ Invalid date format.\n\n"
-                "Please use: YYYY-MM-DD\n"
-                "Example: 2026-12-31"
+                "Please choose again or use format: YYYY-MM-DD",
+                reply_markup=reply_markup
             )
             return END_DATE
     
