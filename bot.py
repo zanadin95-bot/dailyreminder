@@ -34,6 +34,9 @@ reminders = load_reminders()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send welcome message with main menu"""
+    # Clear any ongoing conversation data
+    context.user_data.clear()
+    
     keyboard = [
         ['1. Add Reminder'],
         ['2. See List'],
@@ -564,7 +567,10 @@ def main():
             END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_end_date)],
             ONE_OFF_DATETIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_one_off_datetime)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CommandHandler('start', start)
+        ],
     )
     
     # Remove reminder conversation handler
@@ -575,7 +581,10 @@ def main():
         states={
             REMOVE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, remove_reminder_confirm)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CommandHandler('start', start)
+        ],
     )
     
     # Add handlers - ORDER MATTERS!
